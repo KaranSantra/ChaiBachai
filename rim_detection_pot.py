@@ -91,7 +91,7 @@ class PotRimDetector:
             minDist=20,
             param1=50,
             param2=30,
-            minRadius=10,
+            minRadius=50,
             maxRadius=0,
         )
 
@@ -114,12 +114,28 @@ class PotRimDetector:
         return rim_line, output_image
 
     def _process_circles(self, circles, output_image):
-        """Process detected circles"""
+        """Process detected circles and draw vertical line from intersection"""
         circles = np.uint16(np.around(circles))
         for circle in circles[0, :]:
             x, y, r = circle
             cv2.circle(output_image, (x, y), r, (0, 255, 0), 2)
-            return int(y - r)
+
+            # Calculate intersection of rim line and circle
+            rim_line = int(y - r)
+            intersection_x = x
+
+            # Check if intersection point is valid
+            if rim_line > 0:
+                # Draw vertical line from intersection to bottom of frame
+                cv2.line(
+                    output_image,
+                    (intersection_x, rim_line),
+                    (intersection_x, output_image.shape[0]),
+                    (255, 0, 0),
+                    2,
+                )
+
+            return rim_line
         return None
 
     def _process_contours(self, rim_edges, output_image):
@@ -156,9 +172,10 @@ def main():
     detector = PotRimDetector(trainedModel)
     # Process images
     latest_folder = max(glob.glob(f"{testFolder}"), key=os.path.getmtime)
-    for img_path in glob.glob(f"{latest_folder}/*.webp")[:]:
+    for img_path in glob.glob(f"{latest_folder}/*.*")[:]:
         image = cv2.imread(img_path)
         pot_bboxes = detector.detect_pots(image)
+
         detections = detector.detect_rim(image, pot_bboxes)
 
         for rim_line, output_image in detections:
