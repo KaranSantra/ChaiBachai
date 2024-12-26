@@ -46,10 +46,13 @@ class PotRimDetector:
             x_min, y_min, x_max, y_max = map(int, box)
 
             # Process ROI
-            # roi = self._get_roi(image, x_min, y_min, x_max, y_max)
             norm_img = self._normalize_perspective(image, box)
-            cv2.imshow("Rim Edges", norm_img)
+
+            # Create and display color mask
+            color_mask = self._create_color_mask(norm_img, n_colors=3)
+            cv2.imshow("Color Segments", color_mask)
             cv2.waitKey(0)
+
             edges = self._preprocess_image(norm_img)
             cv2.imshow("Edges", edges)
             cv2.waitKey(0)
@@ -166,13 +169,50 @@ class PotRimDetector:
         normalized_roi = cv2.warpPerspective(image, matrix, (300, 300))
         return normalized_roi
 
+    def _create_color_mask(self, image, n_colors=3):
+        """Create a color mask using K-means clustering with enhanced color flattening
+
+        Args:
+            image: Input BGR image
+            n_colors: Number of colors to segment (default=3)
+        Returns:
+            mask: Color-segmented image
+        """
+        # Reduce noise and detail
+        blurred = cv2.GaussianBlur(image, (7, 7), 0)
+
+        # Convert to LAB color space for better color segmentation
+        lab_image = cv2.cvtColor(blurred, cv2.COLOR_BGR2LAB)
+
+        # Reshape image for K-means
+        pixels = lab_image.reshape(-1, 3).astype(np.float32)
+
+        # Define criteria and apply K-means with stronger convergence
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 200, 0.1)
+        _, labels, centers = cv2.kmeans(
+            pixels, n_colors, None, criteria, 20, cv2.KMEANS_RANDOM_CENTERS
+        )
+
+        # Convert back to uint8 and reshape
+        centers = np.uint8(centers)
+        flattened = centers[labels.flatten()]
+        mask = flattened.reshape(image.shape)
+
+        # Convert back to BGR
+        mask = cv2.cvtColor(mask, cv2.COLOR_LAB2BGR)
+
+        # Apply bilateral filter to further flatten while preserving edges
+        mask = cv2.bilateralFilter(mask, 9, 75, 75)
+
+        return mask
+
 
 def main():
     # Initialize detector
     detector = PotRimDetector(trainedModel)
     # Process images
     latest_folder = max(glob.glob(f"{testFolder}"), key=os.path.getmtime)
-    for img_path in glob.glob(f"{latest_folder}/*.*")[:]:
+    for img_path in glob.glob(f"{latest_folder}/test-2.*")[:]:
         image = cv2.imread(img_path)
         pot_bboxes = detector.detect_pots(image)
 
