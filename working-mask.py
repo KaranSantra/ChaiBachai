@@ -6,6 +6,7 @@ import os
 
 HOME = os.getcwd()
 print("HOME:", HOME)
+LIVE_VIDEO_PATH = "http://192.168.1.202:8080/video"
 # !pip install -q 'git+https://github.com/facebookresearch/segment-anything.git'
 # !pip install -q jupyter_bbox_widget roboflow dataclasses-json supervision==0.23.0
 # %pip install "ultralytics<=8.3.40"
@@ -83,7 +84,6 @@ def show_box(box, ax):
 
 
 # helper function that loads an image before adding it to the widget
-
 import base64
 
 
@@ -111,9 +111,8 @@ widget = BBoxWidget()
 widget.image = encode_image(IMAGE_PATH)
 widget
 
+
 # end of widget helper functions
-
-
 def create_point_coordinates(bboxes):
     """Convert bounding box coordinates to point array"""
     input_point = np.zeros((0, 2))
@@ -225,4 +224,152 @@ def main2(sam_model, image_path, bboxes):
 
 
 # Usage:
-highest_fg, highest_bg = main2(sam, IMAGE_PATH, widget.bboxes)
+# highest_fg, highest_bg = main2(sam, IMAGE_PATH, widget.bboxes)
+
+
+def extract_frames(video_path, output_dir):
+    """Extract frames from video at 1-second intervals and save them to output directory"""
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Open video file
+    cap = cv2.VideoCapture(video_path)
+
+    # Get video FPS
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    frame_count = 0
+    save_count = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        # Save frame if it corresponds to a second mark (based on FPS)
+        if frame_count % int(fps) == 0:
+            frame_path = os.path.join(output_dir, f"frame-{save_count:04d}.jpg")
+            cv2.imwrite(frame_path, frame)
+            save_count += 1
+
+        frame_count += 1
+
+    cap.release()
+    return save_count
+
+
+def get_user_points(image_path):
+    """Get user points using BBoxWidget"""
+    widget = BBoxWidget()
+    widget.image = encode_image(image_path)
+    display(widget)
+
+    return widget.bboxes
+
+
+def process_points(bboxes):
+    """Process bounding boxes to identify rim and tea points"""
+    if len(bboxes) != 2:
+        raise ValueError("Please select exactly two points")
+
+    points = [(box["y"], box) for box in bboxes]
+    points.sort(reverse=True)  # Sort by y-coordinate (highest first)
+
+    rim_point = points[0][1]  # Point with higher y-coordinate
+    tea_point = points[1][1]  # Point with lower y-coordinate
+
+    return rim_point, tea_point
+
+
+def generate_masks(predictor, image_path, rim_point, tea_point):
+    """Generate masks for rim and tea"""
+    # Convert points to numpy arrays
+    rim_coords = np.array([[rim_point["x"], rim_point["y"]]])
+    tea_coords = np.array([[tea_point["x"], tea_point["y"]]])
+
+    # Get masks
+    image = cv2.imread(image_path)
+    predictor.set_image(image)
+
+    # Generate rim mask (background)
+    rim_masks, _, _ = predictor.predict(
+        point_coords=rim_coords,
+        point_labels=np.array([0]),  # Background
+        multimask_output=False,
+    )
+
+    # Generate tea mask (foreground)
+    tea_masks, _, _ = predictor.predict(
+        point_coords=tea_coords,
+        point_labels=np.array([1]),  # Foreground
+        multimask_output=False,
+    )
+
+    return image, rim_masks, tea_masks
+
+
+def visualize_masks(image, rim_masks, tea_masks):
+    """Visualize masks for user approval"""
+    plt.figure(figsize=(10, 10))
+    plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+    # Show rim mask in red
+    if rim_masks is not None:
+        show_mask(rim_masks[0], plt.gca(), color=np.array([1, 0, 0, 0.5]))
+
+    # Show tea mask in green
+    if tea_masks is not None:
+        show_mask(tea_masks[0], plt.gca(), color=np.array([0, 1, 0, 0.5]))
+
+    plt.axis("off")
+    plt.show()
+
+
+def process_video_frames(video_path, sam_model):
+    """Main function to process video frames"""
+    # Extract frames
+    frames_dir = os.path.join(os.path.dirname(video_path), "frames")
+    frame_count = extract_frames(video_path, frames_dir)
+
+    # Initialize predictor
+    predictor = SamPredictor(sam_model)
+
+    # Get user input on first frame
+    first_frame = os.path.join(frames_dir, "frame-0000.jpg")
+    bboxes = get_user_points(first_frame)
+    rim_point, tea_point = process_points(bboxes)
+
+    # Generate and show masks for first frame
+    image, rim_masks, tea_masks = generate_masks(
+        predictor, first_frame, rim_point, tea_point
+    )
+    visualize_masks(image, rim_masks, tea_masks)
+
+    # Get user approval
+    approval = input("Do you approve these masks? (yes/no): ")
+    if approval.lower() != "yes":
+        return
+
+    # Process all frames
+    results = []
+    for i in range(frame_count):
+        frame_path = os.path.join(frames_dir, f"frame-{i:04d}.jpg")
+        image, rim_masks, tea_masks = generate_masks(
+            predictor, frame_path, rim_point, tea_point
+        )
+
+        # Find highest points
+        if rim_masks is not None and tea_masks is not None:
+            rim_highest = find_highest_point(rim_masks[0])
+            tea_highest = find_highest_point(tea_masks[0])
+
+            if rim_highest is not None and tea_highest is not None:
+                distance = rim_highest[0][1] - tea_highest[0][1]
+                print(f"Frame {i}: Distance from rim to tea: {distance} pixels")
+                results.append((i, distance))
+
+    return results
+
+
+# Example usage
+video_path = "rising-tea.mp4"
+results = process_video_frames(video_path, sam)
