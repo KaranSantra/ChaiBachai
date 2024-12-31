@@ -1,3 +1,4 @@
 Use the following rules to write code:
 
 Use the openCV documentation to perform image processing tasks.
+Use the supervision library to perform object detection tasks.

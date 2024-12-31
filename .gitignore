@@ -1,3 +1,5 @@
+SAM-TRAIN-IMAGES*
+*.mp4
 .DS_Store
 runs/detect/predict*
 # Byte-compiled / optimized / DLL files
